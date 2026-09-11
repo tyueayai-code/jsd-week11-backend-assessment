@@ -1,168 +1,292 @@
+require('dotenv').config();
+const dns = require('dns');
 const express = require('express');
 const cors = require('cors');
+const mongoose = require('mongoose');
+const Product = require('./models/Product');
+
+// แก้ปัญหา querySrv ECONNREFUSED บน Windows เมื่อเชื่อมต่อ mongodb+srv://
+try {
+  dns.setServers(['8.8.8.8', '1.1.1.1']);
+} catch (e) {
+  // ignore if not supported
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const MONGODB_URI = process.env.MONGODB_URI;
 
 // ==========================================
 // Middleware Section
 // ==========================================
 
 // 1. CORS Middleware
-// ช่วยให้ frontend (เช่น React ที่รันบน port 5173) สามารถส่ง request ข้าม origin มายัง API ที่ port 3000 ได้
 app.use(cors());
 
 // 2. Built-in express.json() Middleware
-// แปลง incoming request body ที่มี Content-Type: application/json ให้อยู่ในรูป JavaScript object เข้าถึงผ่าน `req.body`
-// ถ้าไม่ใส่ตัวนี้ `req.body` จะกลายเป็น `undefined`
 app.use(express.json());
 
 // 3. Custom Middleware: Request Logger
-// ทำงานทุกครั้งที่มี request วิ่งเข้ามา เพื่อบันทึกเวลา, HTTP Method และ URL
 app.use((req, res, next) => {
   const timestamp = new Date().toISOString();
   console.log(`[${timestamp}] ${req.method} ${req.originalUrl}`);
-  next(); // ต้องเรียก next() เสมอ เพื่อส่งต่อไปยัง middleware หรือ route ถัดไป
+  next();
 });
 
 // ==========================================
-// In-Memory Data Store
+// Database Connection & In-Memory Fallback
 // ==========================================
-// เก็บข้อมูล products ไว้ใน array ใน memory ชั่วคราว (เมื่อ restart server ข้อมูลจะกลับเป็นค่าเริ่มต้น)
-let products = [
+let isMongoConnected = false;
+
+// ข้อมูลเริ่มต้นสำหรับ In-Memory (ใช้เมื่อ MongoDB ยังเชื่อมต่อไม่ได้)
+let memoryProducts = [
   { id: "1", name: "Wireless Mouse", price: 29.99, quantity: 5 },
   { id: "2", name: "Mechanical Keyboard", price: 89.99, quantity: 2 },
   { id: "3", name: "USB-C Hub", price: 19.99, quantity: 8 }
 ];
 
+if (MONGODB_URI) {
+  mongoose.connect(MONGODB_URI, { serverSelectionTimeoutMS: 5000 })
+    .then(async () => {
+      isMongoConnected = true;
+      console.log('✅ Connected to MongoDB Atlas successfully!');
+      
+      // Seed initial products if collection is empty
+      const count = await Product.countDocuments();
+      if (count === 0) {
+        await Product.insertMany([
+          { name: "Wireless Mouse", price: 29.99, quantity: 5 },
+          { name: "Mechanical Keyboard", price: 89.99, quantity: 2 },
+          { name: "USB-C Hub", price: 19.99, quantity: 8 }
+        ]);
+        console.log('🌱 Seeded initial products into MongoDB Atlas.');
+      }
+    })
+    .catch(err => {
+      isMongoConnected = false;
+      console.error('❌ MongoDB Connection Error:', err.message);
+      console.warn('⚠️ Server will run with In-Memory data store until MongoDB credentials are confirmed.');
+    });
+} else {
+  console.warn('⚠️ Warning: MONGODB_URI not found in .env, running with In-Memory store.');
+}
+
 // ==========================================
-// Routes
+// Routes (Dual Mode: MongoDB & In-Memory)
 // ==========================================
 
-// 1. GET /products - คืนค่า products ทั้งหมด พร้อมรองรับ query string (?search=... & ?sort=...)
-app.get('/products', (req, res) => {
-  let result = [...products];
-  const { search, sort } = req.query;
+// 1. GET /products - คืนค่า products ทั้งหมด พร้อมรองรับ query string
+app.get('/products', async (req, res, next) => {
+  try {
+    const { search, sort } = req.query;
 
-  // กรองตามชื่อสินค้าถ้ามีการระบุ ?search=
-  if (search) {
-    const keyword = search.trim().toLowerCase();
-    result = result.filter(item => item.name.toLowerCase().includes(keyword));
+    if (isMongoConnected) {
+      let filter = {};
+      if (search) {
+        filter.name = { $regex: search.trim(), $options: 'i' };
+      }
+
+      let query = Product.find(filter);
+      if (sort === 'price_asc') query = query.sort({ price: 1 });
+      else if (sort === 'price_desc') query = query.sort({ price: -1 });
+
+      const result = await query;
+      return res.status(200).json(result);
+    }
+
+    // In-Memory Fallback
+    let result = [...memoryProducts];
+    if (search) {
+      const keyword = search.trim().toLowerCase();
+      result = result.filter(item => item.name.toLowerCase().includes(keyword));
+    }
+    if (sort === 'price_asc') result.sort((a, b) => a.price - b.price);
+    else if (sort === 'price_desc') result.sort((a, b) => b.price - a.price);
+
+    res.status(200).json(result);
+  } catch (err) {
+    next(err);
   }
-
-  // เรียงลำดับตามราคาถ้ามีการระบุ ?sort=price_asc หรือ ?sort=price_desc
-  if (sort === 'price_asc') {
-    result.sort((a, b) => a.price - b.price);
-  } else if (sort === 'price_desc') {
-    result.sort((a, b) => b.price - a.price);
-  }
-
-  res.status(200).json(result);
 });
 
 // 2. GET /products/:id - คืนค่า product ตัวเดียวตาม ID
-app.get('/products/:id', (req, res) => {
-  const { id } = req.params;
-  const product = products.find(item => item.id === id);
+app.get('/products/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
 
-  if (!product) {
-    return res.status(404).json({ error: `Product with ID '${id}' not found` });
+    if (isMongoConnected) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(404).json({ error: `Product with ID '${id}' not found` });
+      }
+      const product = await Product.findById(id);
+      if (!product) {
+        return res.status(404).json({ error: `Product with ID '${id}' not found` });
+      }
+      return res.status(200).json(product);
+    }
+
+    // In-Memory Fallback
+    const product = memoryProducts.find(item => item.id === id);
+    if (!product) {
+      return res.status(404).json({ error: `Product with ID '${id}' not found` });
+    }
+    res.status(200).json(product);
+  } catch (err) {
+    next(err);
   }
-
-  res.status(200).json(product);
 });
 
 // 3. POST /products - เพิ่ม product ใหม่
-app.post('/products', (req, res) => {
-  const { name, price, quantity } = req.body;
+app.post('/products', async (req, res, next) => {
+  try {
+    const { name, price, quantity } = req.body;
 
-  // Validation: ตรวจสอบความถูกต้องของข้อมูล
-  if (!name || typeof name !== 'string' || name.trim() === '') {
-    return res.status(400).json({ error: "Field 'name' is required and must be a non-empty string" });
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({ error: "Field 'name' is required and must be a non-empty string" });
+    }
+
+    const numericPrice = Number(price);
+    if (price === undefined || price === null || isNaN(numericPrice) || numericPrice < 0) {
+      return res.status(400).json({ error: "Field 'price' is required and must be a positive number" });
+    }
+
+    const numericQuantity = quantity !== undefined ? Number(quantity) : 1;
+    if (isNaN(numericQuantity) || numericQuantity < 0) {
+      return res.status(400).json({ error: "Field 'quantity' must be a valid non-negative number" });
+    }
+
+    if (isMongoConnected) {
+      const newProduct = await Product.create({
+        name: name.trim(),
+        price: numericPrice,
+        quantity: numericQuantity
+      });
+      return res.status(201).json(newProduct);
+    }
+
+    // In-Memory Fallback
+    const newProduct = {
+      id: String(Date.now()),
+      name: name.trim(),
+      price: numericPrice,
+      quantity: numericQuantity
+    };
+    memoryProducts.push(newProduct);
+    res.status(201).json(newProduct);
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message });
+    }
+    next(err);
   }
-
-  const numericPrice = Number(price);
-  if (price === undefined || price === null || isNaN(numericPrice) || numericPrice < 0) {
-    return res.status(400).json({ error: "Field 'price' is required and must be a positive number" });
-  }
-
-  const numericQuantity = quantity !== undefined ? Number(quantity) : 1;
-  if (isNaN(numericQuantity) || numericQuantity < 0) {
-    return res.status(400).json({ error: "Field 'quantity' must be a valid non-negative number" });
-  }
-
-  // สร้าง product ชิ้นใหม่พร้อมสร้าง ID เป็น string
-  const newProduct = {
-    id: String(Date.now()),
-    name: name.trim(),
-    price: numericPrice,
-    quantity: numericQuantity
-  };
-
-  products.push(newProduct);
-  // HTTP 201 Created บ่งบอกว่า resource ถูกสร้างสำเร็จ
-  res.status(201).json(newProduct);
 });
 
 // 4. PUT /products/:id - แก้ไข product ที่มีอยู่
-app.put('/products/:id', (req, res) => {
-  const { id } = req.params;
-  const productIndex = products.findIndex(item => item.id === id);
+app.put('/products/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, price, quantity } = req.body;
+    const updateData = {};
 
-  if (productIndex === -1) {
-    return res.status(404).json({ error: `Product with ID '${id}' not found` });
-  }
-
-  const { name, price, quantity } = req.body;
-
-  // Validation ในกรณีที่มีการส่งค่านั้นๆ มาแก้ไข
-  if (name !== undefined) {
-    if (typeof name !== 'string' || name.trim() === '') {
-      return res.status(400).json({ error: "Field 'name' cannot be empty" });
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim() === '') {
+        return res.status(400).json({ error: "Field 'name' cannot be empty" });
+      }
+      updateData.name = name.trim();
     }
-  }
 
-  if (price !== undefined) {
-    const numericPrice = Number(price);
-    if (isNaN(numericPrice) || numericPrice < 0) {
-      return res.status(400).json({ error: "Field 'price' must be a positive number" });
+    if (price !== undefined) {
+      const numericPrice = Number(price);
+      if (isNaN(numericPrice) || numericPrice < 0) {
+        return res.status(400).json({ error: "Field 'price' must be a positive number" });
+      }
+      updateData.price = numericPrice;
     }
-  }
 
-  if (quantity !== undefined) {
-    const numericQuantity = Number(quantity);
-    if (isNaN(numericQuantity) || numericQuantity < 0) {
-      return res.status(400).json({ error: "Field 'quantity' must be a non-negative number" });
+    if (quantity !== undefined) {
+      const numericQuantity = Number(quantity);
+      if (isNaN(numericQuantity) || numericQuantity < 0) {
+        return res.status(400).json({ error: "Field 'quantity' must be a non-negative number" });
+      }
+      updateData.quantity = numericQuantity;
     }
+
+    if (isMongoConnected) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(404).json({ error: `Product with ID '${id}' not found` });
+      }
+
+      const updatedProduct = await Product.findByIdAndUpdate(
+        id,
+        updateData,
+        { new: true, runValidators: true }
+      );
+
+      if (!updatedProduct) {
+        return res.status(404).json({ error: `Product with ID '${id}' not found` });
+      }
+
+      return res.status(200).json(updatedProduct);
+    }
+
+    // In-Memory Fallback
+    const index = memoryProducts.findIndex(item => item.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: `Product with ID '${id}' not found` });
+    }
+
+    const existing = memoryProducts[index];
+    const updated = {
+      ...existing,
+      name: name !== undefined ? name.trim() : existing.name,
+      price: price !== undefined ? Number(price) : existing.price,
+      quantity: quantity !== undefined ? Number(quantity) : existing.quantity
+    };
+    memoryProducts[index] = updated;
+    res.status(200).json(updated);
+  } catch (err) {
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({ error: err.message });
+    }
+    next(err);
   }
-
-  // อัปเดตข้อมูลเฉพาะ field ที่ส่งมา
-  const existingProduct = products[productIndex];
-  const updatedProduct = {
-    ...existingProduct,
-    name: name !== undefined ? name.trim() : existingProduct.name,
-    price: price !== undefined ? Number(price) : existingProduct.price,
-    quantity: quantity !== undefined ? Number(quantity) : existingProduct.quantity
-  };
-
-  products[productIndex] = updatedProduct;
-  res.status(200).json(updatedProduct);
 });
 
 // 5. DELETE /products/:id - ลบ product
-app.delete('/products/:id', (req, res) => {
-  const { id } = req.params;
-  const productIndex = products.findIndex(item => item.id === id);
+app.delete('/products/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
 
-  if (productIndex === -1) {
-    return res.status(404).json({ error: `Product with ID '${id}' not found` });
+    if (isMongoConnected) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(404).json({ error: `Product with ID '${id}' not found` });
+      }
+
+      const deletedProduct = await Product.findByIdAndDelete(id);
+      if (!deletedProduct) {
+        return res.status(404).json({ error: `Product with ID '${id}' not found` });
+      }
+
+      return res.status(200).json({
+        message: "Product deleted successfully",
+        product: deletedProduct
+      });
+    }
+
+    // In-Memory Fallback
+    const index = memoryProducts.findIndex(item => item.id === id);
+    if (index === -1) {
+      return res.status(404).json({ error: `Product with ID '${id}' not found` });
+    }
+
+    const [deletedProduct] = memoryProducts.splice(index, 1);
+    res.status(200).json({
+      message: "Product deleted successfully",
+      product: deletedProduct
+    });
+  } catch (err) {
+    next(err);
   }
-
-  const [deletedProduct] = products.splice(productIndex, 1);
-  res.status(200).json({
-    message: "Product deleted successfully",
-    product: deletedProduct
-  });
 });
 
 // ==========================================
@@ -173,9 +297,8 @@ app.use((req, res) => {
 });
 
 // ==========================================
-// Error-Handling Middleware (4 arguments)
+// Error-Handling Middleware
 // ==========================================
-// วางไว้ท้ายสุดของ middleware chain เพื่อดักจับข้อผิดพลาดที่ไม่คาดคิด
 app.use((err, req, res, next) => {
   console.error("Unhandled Server Error:", err);
   res.status(500).json({
@@ -190,4 +313,3 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log(`Server is running on http://localhost:${PORT}`);
 });
-
