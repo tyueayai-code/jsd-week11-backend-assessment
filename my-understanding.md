@@ -33,35 +33,49 @@ rate ตัวเองอย่างตรงไปตรงมาโดยใ
 
 *คำตอบของคุณ:*
 
----
+GET ใช้ดึงข้อมูลเพื่อมาอ่านโดยไม่แก้ไขอะไรเลย 
+POST ใช้สร้างข้อมูลใหม่ทั้งหมด
+PATCH ใช้สร้างข้อมูลแค่บางฟิลด์
+DELETE ใช้ลบข้อมูล
+ไม่ใช้ POST สำหรับทุกอย่าง เพราะจะไม่ตรงตาม หลัก REST API
 
 **2. `express.json()` คืออะไร และจะเกิดอะไรขึ้นถ้าคุณไม่ใส่มัน?**
 
 *คำตอบของคุณ:*
 
----
+เป็น middleware ของ express ที่แปลงข้อมูลจาก json เป็น js object 
+ถ้าไม่ใส่ req.body จะขึ้นว่า undefined server จะไม่สามารถอ่านค่า payload จากฝั่ง client ได้เลย ทำให้อัพเดตไฟล์ไม่ได้
 
 **3. `req.body`, `req.params`, และ `req.query` ต่างกันอย่างไร? ยกตัวอย่างจริงจาก API ของคุณสำหรับแต่ละตัว**
 
 *คำตอบของคุณ:*
 
----
+req.body ข้อมูลที่ส่งงมาในbody 
+Ex. { name: 'Gaming Headset', price: 59.99, quantity: 4 } จะได้ค่าใน req.body.name, req.body.price, req.body.quantity
+req.params ค่าที่อยู่ใน url รายชิ้น 
+Ex.GET /products/:id เมื่อยิงไปที่ /products/not-exist-999 จะได้ req.params.id คือ 'not-exist-999'
+req.query ค่าที่อยู่หลัง ? ใช้เสิร์ชหา 
+Ex.ใน GET /products?search=keyboard จะได้ req.query.search คือ 'keyboard'
 
 **4. HTTP status codes คืออะไร? ระบุรายการ status code ทุกตัวที่คุณใช้ใน API และอธิบายว่าทำไมถึงเลือกใช้ในแต่ละสถานการณ์**
 
 *คำตอบของคุณ:*
 
----
+คือ ตัวเลขสามหลักที่ ส่งมาบอกสถานะของ request 
+200 OK ทำงานสำเร็จทั่วไป 
+201 Created สร้างสินค้าชิ้นใหม่สำเร็จ ใช้ตอน POST /products แล้วได้สินค้าพร้อม ID กลับมา
+400 Bad Request ฝั่ง client ส่งข้อมูลผิดหรือส่งมาไม่ครบ เช่น POST /products แต่ใส่ name: "" หรือราคาติดลบ price: -10
+404 Not Found ไม่พบข้อมูลในระบบ เช่น เรียกดูสินค้าที่ไม่มีอยู่จริงผ่าน GET /products/not-exist-999
 
 **5. middleware คืออะไร? อธิบายด้วยคำพูดของคุณเองว่ามันทำอะไร พร้อมยกตัวอย่าง 1 อย่างจากโค้ดของคุณ**
 
 *คำตอบของคุณ:*
-
----
+ตัวดักจับ request ที่ทำงานอยู่ตรงกลางระหว่างที่ client ส่ง request มา ก่อนจะหลุดเข้าไปถึงฟังก์ชันหลักของ route เพื่อจัดการ แปลง หรือตรวจเช็กข้อมูล
+ตย. app.use(express.json()) ที่ทำหน้าที่แปลง request body ที่เป็น JSON ให้อยู่ในรูป Object ก่อนส่งต่อไปให้ route ต่าง ๆ
 
 **6. ทำไม order ของ middleware ใน Express ถึงสำคัญ? จะเกิดอะไรขึ้นถ้า order ผิด?**
 
-*คำตอบของคุณ:*
+เพราะ express ทำงานแบบเป็นลำดับ จากบรรทัดบนลงล่าง ถ้า order ผิด อาจขึัน undefined ก่อนนจะอ่านได้ค่าจริงออกมา 
 
 ---
 
@@ -69,19 +83,26 @@ rate ตัวเองอย่างตรงไปตรงมาโดยใ
 
 *คำตอบของคุณ:*
 
----
+1.Request วิ่งเข้ามาที่ server ตาม path /products
+2.Middleware express.json() แปลง body ให้เป็น Object
+3.โค้ดใน route ตรวจ (validation) เช่น ราคาต้องไม่ติดลบ
+4.ถ้าข้อมูลไม่ถูกต้อง จะส่ง status 400 Bad Request ออกไป
+5.ถ้าข้อมูลถูกต้อง จะสร้างสินค้าชิ้นใหม่พร้อมกำหนด id แล้วบันทึกลงในระบบ
+6.Server ส่ง status 201 Created พร้อมข้อมูลสินค้าที่สร้างเสร็จกลับไปให้ client
 
 **8. CRUD คืออะไร? จับคู่แต่ละ operation กับ HTTP method และ route ที่คุณใช้ใน API**
 
 *คำตอบของคุณ:*
 
----
+C (Create)=  POST /products (สร้างสินค้าใหม่)
+R (Read) = GET /products (ดึงสินค้าทั้งหมด) และ GET /products/:id (ดึงสินค้ารายชิ้น)
+U (Update)= PUT /products/:id (แก้ไขข้อมูลสินค้า)
+D (Delete) = DELETE /products/:id (ลบสินค้า)
 
 **9. API ของคุณตอบสนองอย่างไรเมื่อมีอะไรผิดพลาด — เช่น เมื่อ product ตาม ID ที่ระบุไม่มีอยู่จริง?**
 
 *คำตอบของคุณ:*
-
----
+Server จะส่ง Status Code 404 Not Found
 
 ## Frontend & Integration
 
@@ -152,3 +173,4 @@ rate ตัวเองอย่างตรงไปตรงมาโดยใ
 **20. เลือก route (backend) หรือ component (frontend) 1 อันที่ AI ช่วยสร้าง โดยไม่ย้อนกลับไปดู AI chat history อธิบายว่ามันทำอะไรและทำไมถึงทำงาน ด้วยคำพูดของคุณเอง**
 
 *คำตอบของคุณ:*
+
