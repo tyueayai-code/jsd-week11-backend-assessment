@@ -16,9 +16,9 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
 
-// ==========================================
+
 // Middleware Section
-// ==========================================
+
 
 // 1. CORS Middleware
 app.use(cors());
