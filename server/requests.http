@@ -1,0 +1,62 @@
+### 1. Get all products
+GET http://localhost:3000/products
+
+### 2. Search products by name (Query String)
+GET http://localhost:3000/products?search=keyboard
+
+### 3. Sort products by price ascending (Query String)
+GET http://localhost:3000/products?sort=price_asc
+
+### 4. Sort products by price descending (Query String)
+GET http://localhost:3000/products?sort=price_desc
+
+### 5. Get single product by ID (Found - 200 OK)
+GET http://localhost:3000/products/1
+
+### 6. Get single product by ID (Not Found - 404)
+GET http://localhost:3000/products/9999
+
+### 7. Create a new product (Success - 201 Created)
+POST http://localhost:3000/products
+Content-Type: application/json
+
+{
+  "name": "Gaming Monitor 27 inch",
+  "price": 249.99,
+  "quantity": 3
+}
+
+### 8. Create a new product (Validation Error - 400 Bad Request)
+POST http://localhost:3000/products
+Content-Type: application/json
+
+{
+  "name": "",
+  "price": -10
+}
+
+### 9. Update an existing product (Success - 200 OK)
+PUT http://localhost:3000/products/1
+Content-Type: application/json
+
+{
+  "name": "Ergonomic Wireless Mouse",
+  "price": 34.99,
+  "quantity": 10
+}
+
+### 10. Update a non-existent product (404 Not Found)
+PUT http://localhost:3000/products/9999
+Content-Type: application/json
+
+{
+  "name": "Ghost Item",
+  "price": 100
+}
+
+### 11. Delete an existing product (Success - 200 OK)
+DELETE http://localhost:3000/products/2
+
+### 12. Delete a non-existent product (404 Not Found)
+DELETE http://localhost:3000/products/9999
+
